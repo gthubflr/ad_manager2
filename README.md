@@ -59,6 +59,7 @@ Choose whatever fits your workflow best.
 
 If this app helps you and you’d like to support my work,  
 you can **donate a coffee via PayPal** using the link provided in the repository.
+[![PayPal](https://img.shields.io/badge/Donate-PayPal-orange.svg?style=for-the-badge&logo=paypal)](https://www.paypal.com/donate/?hosted_button_id=TBM9JUQ63CV58)
 
 ## ❤️ Final Words
 
