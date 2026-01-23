@@ -1,12 +1,20 @@
 # ad_manager2
 
 A Flutter-based Android app to manage a **Samba 4 Active Directory / LDAP** environment directly from your phone.
-![Login Screen](screenshots/Screenshot04.png)
-![User Overview](screenshots/Screenshot05.png)
-![Groups](screenshots/Screenshot06.png)
-![Computer](screenshots/Screenshot07.png)
-![Computer Details](screenshots/Screenshot08.png)
-![Computer Attributes](screenshots/Screenshot09.png)
+## 📸 Screenshots
+
+<p align="center">
+  <img src="screenshots/Screenshot04.png" width="220" alt="Login Screen" />
+  <img src="screenshots/Screenshot05.png" width="220" alt="User Overview" />
+  <img src="screenshots/Screenshot06.png" width="220" alt="Groups" />
+</p>
+
+<p align="center">
+  <img src="screenshots/Screenshot07.png" width="220" alt="Computer" />
+  <img src="screenshots/Screenshot08.png" width="220" alt="Computer Details" />
+  <img src="screenshots/Screenshot09.png" width="220" alt="Computer Attributes" />
+</p>
+
 
 ## 📱 Overview
 
