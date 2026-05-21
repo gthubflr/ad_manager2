@@ -2,34 +2,55 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../models/ad_computer.dart';
-import '../models/ad_group.dart'; // WICHTIG: Import für Typ-Check
+import '../models/ad_group.dart';
+import '../models/bitlocker_info.dart';
+import '../providers/computer_provider.dart';
 import '../providers/group_provider.dart';
 
-class ComputerDetailsScreen extends StatelessWidget {
+class ComputerDetailsScreen extends StatefulWidget {
   final ADComputer computer;
 
   const ComputerDetailsScreen({super.key, required this.computer});
 
   @override
+  State<ComputerDetailsScreen> createState() => _ComputerDetailsScreenState();
+}
+
+class _ComputerDetailsScreenState extends State<ComputerDetailsScreen> {
+  // Steuert, welche Recovery-Keys im Klartext sichtbar sind
+  final Set<int> _visibleKeys = {};
+
+  @override
+  void initState() {
+    super.initState();
+    // BitLocker-Daten beim Öffnen des Screens im Hintergrund laden
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context
+          .read<ComputerProvider>()
+          .loadBitLockerInfo(widget.computer.distinguishedName);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // Holen aller Gruppen, in denen dieser Computer Mitglied ist
+    // Watcht nur den GroupProvider für den Gruppen-Tab
     final groupProvider = context.watch<GroupProvider>();
     
-    // Sicherer Filter: Wir vergleichen DNs
     final memberOfGroups = groupProvider.groups.where(
-      (g) => g.members.contains(computer.distinguishedName)
+      (g) => g.members.contains(widget.computer.distinguishedName)
     ).toList();
 
     return DefaultTabController(
-      length: 3,
+      length: 4, 
       child: Scaffold(
         appBar: AppBar(
-          title: Text(computer.name),
+          title: Text(widget.computer.name),
           bottom: const TabBar(
             tabs: [
-              Tab(icon: Icon(Icons.info_outline), text: 'Info'),
-              Tab(icon: Icon(Icons.groups_outlined), text: 'Mitglied von'),
-              Tab(icon: Icon(Icons.table_chart), text: 'Attribute'),
+              Tab(icon: Icon(Icons.info_outline),      text: 'Info'),
+              Tab(icon: Icon(Icons.groups_outlined),   text: 'Mitglied von'),
+              Tab(icon: Icon(Icons.lock_outline),      text: 'BitLocker'),
+              Tab(icon: Icon(Icons.table_chart),       text: 'Attribute'),
             ],
           ),
         ),
@@ -37,12 +58,22 @@ class ComputerDetailsScreen extends StatelessWidget {
           children: [
             _buildInfoTab(context),
             _buildMembershipTab(context, memberOfGroups),
+            
+            // Verwendung von Consumer verhindert das Neuladen des gesamten Screens
+            Consumer<ComputerProvider>(
+              builder: (context, computerProvider, child) {
+                return _buildBitLockerTab(context, computerProvider);
+              },
+            ),
+            
             _buildAttributesTab(context),
           ],
         ),
       ),
     );
   }
+
+  // ==================== INFO-TAB ====================
 
   Widget _buildInfoTab(BuildContext context) {
     return SingleChildScrollView(
@@ -54,9 +85,9 @@ class ComputerDetailsScreen extends StatelessWidget {
             context,
             'Allgemein',
             [
-              _InfoRow('Name', computer.name),
-              _InfoRow('DNS Hostname', (computer.dnsHostName?.isNotEmpty ?? false) ? computer.dnsHostName! : '-'),
-              _InfoRow('Status', computer.isEnabled ? 'Aktiv' : 'Deaktiviert'),
+              _InfoRow('Name', widget.computer.name),
+              _InfoRow('DNS Hostname', (widget.computer.dnsHostName?.isNotEmpty ?? false) ? widget.computer.dnsHostName! : '-'),
+              _InfoRow('Status', widget.computer.isEnabled ? 'Aktiv' : 'Deaktiviert'),
             ],
           ),
           const SizedBox(height: 16),
@@ -64,8 +95,8 @@ class ComputerDetailsScreen extends StatelessWidget {
             context,
             'Betriebssystem',
             [
-              _InfoRow('OS', computer.operatingSystem ?? 'Unbekannt'),
-              _InfoRow('Version', (computer.operatingSystemVersion?.isNotEmpty ?? false) ? computer.operatingSystemVersion! : '-'),
+              _InfoRow('OS', widget.computer.operatingSystem ?? 'Unbekannt'),
+              _InfoRow('Version', (widget.computer.operatingSystemVersion?.isNotEmpty ?? false) ? widget.computer.operatingSystemVersion! : '-'),
             ],
           ),
           const SizedBox(height: 16),
@@ -73,17 +104,17 @@ class ComputerDetailsScreen extends StatelessWidget {
             context,
             'Standort',
             [
-              _InfoRow('Organisationseinheit', computer.organizationalUnit ?? 'Root / Unbekannt'),
-              _InfoRow('Distinguished Name', computer.distinguishedName, monospace: true, copyable: true),
+              _InfoRow('Organisationseinheit', widget.computer.organizationalUnit ?? 'Root / Unbekannt'),
+              _InfoRow('Distinguished Name', widget.computer.distinguishedName, monospace: true, copyable: true),
             ],
           ),
-          if (computer.lastLogon != null) ...[
+          if (widget.computer.lastLogon != null) ...[
             const SizedBox(height: 16),
             _buildInfoCard(
               context,
               'Aktivität',
               [
-                _InfoRow('Letzte Anmeldung', computer.lastLogon ?? '-'),
+                _InfoRow('Letzte Anmeldung', widget.computer.lastLogon ?? '-'),
               ],
             ),
           ],
@@ -91,6 +122,8 @@ class ComputerDetailsScreen extends StatelessWidget {
       ),
     );
   }
+
+  // ==================== MITGLIED-VON-TAB ====================
 
   Widget _buildMembershipTab(BuildContext context, List<dynamic> groups) {
     if (groups.isEmpty) {
@@ -108,16 +141,13 @@ class ComputerDetailsScreen extends StatelessWidget {
       itemBuilder: (context, index) {
         final item = groups[index];
         
-        // SICHERHEITS-CHECK: Wir bestimmen den Namen basierend auf dem Objekttyp
         String titleText = 'Unbekannt';
         String subtitleText = '';
 
         if (item is ADGroup) {
-          // Wenn es eine Gruppe ist, nutzen wir displayName oder name
           titleText = (item.displayName.isNotEmpty) ? item.displayName : item.name;
           subtitleText = item.distinguishedName;
         } else {
-          // Fallback für alle anderen Typen (wie ADComputer), falls die Liste vermischt ist
           try {
             titleText = item.name;
             subtitleText = item.distinguishedName;
@@ -142,15 +172,262 @@ class ComputerDetailsScreen extends StatelessWidget {
     );
   }
 
+  // ==================== BITLOCKER-TAB ====================
+
+  Widget _buildBitLockerTab(BuildContext context, ComputerProvider computerProvider) {
+    final dn = widget.computer.distinguishedName;
+
+    final isLoading = computerProvider.isBitLockerLoading(dn);
+    final errorMsg  = computerProvider.getBitLockerError(dn);
+    final infos     = computerProvider.getBitLockerInfoFor(dn);
+
+    if (isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return RefreshIndicator(
+      onRefresh: () => computerProvider.loadBitLockerInfo(dn, forceRefresh: true),
+      child: CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.security, color: Colors.blueGrey),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'BitLocker Recovery-Schlüssel',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.refresh),
+                    tooltip: 'Aktualisieren',
+                    onPressed: () => computerProvider.loadBitLockerInfo(dn, forceRefresh: true),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          if (errorMsg != null)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Card(
+                  color: Colors.red.shade50,
+                  child: ListTile(
+                    leading: const Icon(Icons.error_outline, color: Colors.red),
+                    title: Text(errorMsg),
+                  ),
+                ),
+              ),
+            ),
+
+          if (!isLoading && errorMsg == null && infos.isEmpty)
+            const SliverFillRemaining(
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.no_encryption_gmailerrorred_outlined, size: 48, color: Colors.grey),
+                    SizedBox(height: 12),
+                    Text('Keine BitLocker-Schlüssel gefunden.'),
+                    SizedBox(height: 4),
+                    Text(
+                      'Entweder ist das Laufwerk nicht verschlüsselt\noder die Schlüssel wurden nicht ins AD gespeichert.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          if (infos.isNotEmpty)
+            SliverPadding(
+              padding: const EdgeInsets.all(16),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => _buildBitLockerCard(context, infos[index], index),
+                  childCount: infos.length,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBitLockerCard(BuildContext context, BitLockerInfo info, int index) {
+    final isVisible = _visibleKeys.contains(index);
+    final isLatest  = index == 0;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      elevation: isLatest ? 3 : 1,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: isLatest
+            ? BorderSide(color: Theme.of(context).colorScheme.primary, width: 1.5)
+            : BorderSide.none,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.vpn_key,
+                  color: isLatest
+                      ? Theme.of(context).colorScheme.primary
+                      : Colors.blueGrey,
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  isLatest ? 'Aktuellster Schlüssel' : 'Schlüssel ${index + 1}',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: isLatest ? Theme.of(context).colorScheme.primary : null,
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 12),
+
+            if (info.volumeGuid.isNotEmpty) ...[
+              _buildLabeledRow(context, 'Volume GUID', info.volumeGuid, monospace: true),
+              const SizedBox(height: 8),
+            ],
+
+            if (info.whenCreated != null && info.whenCreated!.isNotEmpty) ...[
+              _buildLabeledRow(context, 'Erstellt am', info.whenCreated!),
+              const SizedBox(height: 8),
+            ],
+
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(
+                  width: 110,
+                  child: Text(
+                    'Recovery Key:',
+                    style: TextStyle(fontWeight: FontWeight.w500, color: Colors.black54),
+                  ),
+                ),
+                Expanded(
+                  child: SelectableText(
+                    isVisible
+                        ? info.recoveryKey
+                        : '••••••••-••••••••-••••••••-••••••••-••••••••-••••••••',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: isVisible ? 12 : 14,
+                      letterSpacing: isVisible ? 0.5 : 1,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(isVisible ? Icons.visibility_off : Icons.visibility, size: 18),
+                  tooltip: isVisible ? 'Verbergen' : 'Anzeigen',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => setState(() {
+                    if (isVisible) {
+                      _visibleKeys.remove(index);
+                    } else {
+                      _visibleKeys.add(index);
+                    }
+                  }),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 12),
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton.icon(
+                  icon: const Icon(Icons.copy, size: 16),
+                  label: const Text('Key kopieren'),
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: info.recoveryKey));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Recovery Key in Zwischenablage kopiert'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+                if (info.volumeGuid.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  TextButton.icon(
+                    icon: const Icon(Icons.copy, size: 16),
+                    label: const Text('GUID kopieren'),
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: info.volumeGuid));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Volume GUID in Zwischenablage kopiert'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLabeledRow(BuildContext context, String label, String value, {bool monospace = false}) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 110,
+          child: Text(
+            '$label:',
+            style: const TextStyle(fontWeight: FontWeight.w500, color: Colors.black54),
+          ),
+        ),
+        Expanded(
+          child: SelectableText(
+            value,
+            style: TextStyle(
+              fontFamily: monospace ? 'monospace' : null,
+              fontSize: monospace ? 11 : 14,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ==================== ATTRIBUTE-TAB ====================
+
   Widget _buildAttributesTab(BuildContext context) {
-    final sortedKeys = computer.attributes.keys.toList()..sort();
+    final sortedKeys = widget.computer.attributes.keys.toList()..sort();
 
     return ListView.builder(
       padding: const EdgeInsets.all(16),
       itemCount: sortedKeys.length,
       itemBuilder: (context, index) {
         final key = sortedKeys[index];
-        final values = computer.attributes[key];
+        final values = widget.computer.attributes[key];
         final valueText = values is List ? values.join('\n') : values.toString();
 
         return Card(
@@ -186,6 +463,8 @@ class ComputerDetailsScreen extends StatelessWidget {
       },
     );
   }
+
+  // ==================== SHARED WIDGETS ====================
 
   Widget _buildInfoCard(BuildContext context, String title, List<_InfoRow> rows) {
     return Card(

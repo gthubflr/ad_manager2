@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import '../models/ad_computer.dart';
+import '../models/bitlocker_info.dart';
 import '../services/ad_service.dart';
 
 class ComputerProvider with ChangeNotifier {
@@ -9,12 +10,16 @@ class ComputerProvider with ChangeNotifier {
   String? _errorMessage;
   String _searchQuery = '';
 
+  // BitLocker: Cache pro Computer-DN
+  final Map<String, List<BitLockerInfo>> _bitLockerCache = {};
+  final Map<String, bool> _bitLockerLoading = {};
+  final Map<String, String?> _bitLockerErrors = {};
+
   List<ADComputer> get computers {
     if (_searchQuery.isEmpty) return _computers;
     
     final query = _searchQuery.toLowerCase();
     return _computers.where((c) {
-      // FIX: Suche nur in existierenden Computer-Feldern (KEIN displayName)
       final nameMatch = c.name.toLowerCase().contains(query);
       final dnsMatch = (c.dnsHostName ?? '').toLowerCase().contains(query);
       final osMatch = (c.operatingSystem ?? '').toLowerCase().contains(query);
@@ -29,7 +34,6 @@ class ComputerProvider with ChangeNotifier {
 
   void setADService(ADService? service) {
     _adService = service;
-    // Wenn der Service gesetzt wird, laden wir die Computer automatisch (optional)
     if (_adService != null && _computers.isEmpty) {
       loadComputers();
     }
@@ -60,5 +64,58 @@ class ComputerProvider with ChangeNotifier {
       _isLoading = false;
       notifyListeners();
     }
+  }
+
+  // ==================== BITLOCKER ====================
+
+  /// Gibt gecachte BitLocker-Einträge für einen Computer zurück.
+  /// Liefert eine leere Liste, solange noch nicht geladen wurde.
+  List<BitLockerInfo> getBitLockerInfoFor(String computerDN) =>
+      _bitLockerCache[computerDN] ?? [];
+
+  /// True, solange die BitLocker-Daten für diesen Computer geladen werden.
+  bool isBitLockerLoading(String computerDN) =>
+      _bitLockerLoading[computerDN] ?? false;
+
+  /// Fehlermeldung beim Laden der BitLocker-Daten, oder null.
+  String? getBitLockerError(String computerDN) =>
+      _bitLockerErrors[computerDN];
+
+  /// Lädt die BitLocker-Recovery-Einträge für den angegebenen Computer-DN
+  /// aus dem AD und speichert sie im Cache.
+  /// Wird ein zweites Mal aufgerufen, wird der Cache geleert und neu befüllt
+  /// (ermöglicht manuelles Aktualisieren).
+  Future<void> loadBitLockerInfo(String computerDN, {bool forceRefresh = false}) async {
+    if (_adService == null) return;
+
+    // Bereits geladen und kein Refresh gewünscht → nichts tun
+    if (!forceRefresh &&
+        _bitLockerCache.containsKey(computerDN) &&
+        !(_bitLockerLoading[computerDN] ?? false)) {
+      return;
+    }
+
+    _bitLockerLoading[computerDN] = true;
+    _bitLockerErrors[computerDN] = null;
+    notifyListeners();
+
+    try {
+      final infos = await _adService!.getBitLockerInfo(computerDN);
+      _bitLockerCache[computerDN] = infos;
+    } catch (e) {
+      _bitLockerErrors[computerDN] = 'Fehler beim Laden der BitLocker-Daten: $e';
+      _bitLockerCache[computerDN] = [];
+    } finally {
+      _bitLockerLoading[computerDN] = false;
+      notifyListeners();
+    }
+  }
+
+  /// Löscht den BitLocker-Cache für alle Computer (z.B. nach Logout).
+  void clearBitLockerCache() {
+    _bitLockerCache.clear();
+    _bitLockerLoading.clear();
+    _bitLockerErrors.clear();
+    notifyListeners();
   }
 }

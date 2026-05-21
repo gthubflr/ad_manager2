@@ -1,11 +1,13 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/services.dart';
 import 'package:dartdap/dartdap.dart';
 import '../models/ad_user.dart';
 import '../models/ad_group.dart';
 import '../models/ad_computer.dart';
+import '../models/bitlocker_info.dart';
 import '../models/ldap_config.dart';
 
 class ADService {
@@ -219,19 +221,15 @@ class ADService {
         'sAMAccountName', 
         'displayName', 
         'mail', 
-        'userAccountControl',
+        'userAccountControl', 
         'lockoutTime', 
-        'lastLogon', 
-        'distinguishedName', 
-        'cn',
-        'telephoneNumber',
-        'memberOf'
+        'lastLogon',
+        'distinguishedName',
       ]);
 
       final users = <ADUser>[];
       await for (var entry in searchResult.stream) {
         final a = entry.attributes;
-        
         final username = _getAttributeValue(a, 'sAMAccountName');
         if (username == null || username.isEmpty) continue; 
 
@@ -449,5 +447,111 @@ class ADService {
     final parts = dn.split(',');
     final ouParts = parts.where((p) => p.trim().toUpperCase().startsWith('OU=')).toList();
     return ouParts.isNotEmpty ? ouParts.join(',') : 'Root';
+  }
+
+// ==================== BITLOCKER-VERWALTUNG ====================
+
+  /// Liest alle BitLocker-Recovery-Einträge (msFVE-RecoveryInformation)
+  /// unterhalb des übergebenen Computer-DN aus dem AD.
+  Future<List<BitLockerInfo>> getBitLockerInfo(String computerDN) async {
+    return _executeWithReconnect(() async {
+      if (_connection == null) throw Exception('Nicht mit LDAP verbunden');
+
+      final searchResult = await _connection!.search(
+        computerDN, // Suchbasis ist der Computer
+        Filter.equals('objectClass', 'msFVE-RecoveryInformation'),
+        ['msFVE-RecoveryPassword', 'msFVE-VolumeGuid', 'whenCreated', 'distinguishedName'],
+      );
+
+      final results = <BitLockerInfo>[];
+
+      await for (var entry in searchResult.stream) {
+        final a = entry.attributes;
+
+        // Hilfsfunktion: Sucht Attribute Case-Insensitive, um Fehler zu vermeiden
+        Attribute? getAttr(String name) {
+          final lowerName = name.toLowerCase();
+          for (var key in a.keys) {
+            if (key.toLowerCase() == lowerName) return a[key];
+          }
+          return null;
+        }
+
+        // Recovery-Passwort auslesen
+        final passAttr = getAttr('msFVE-RecoveryPassword');
+        if (passAttr == null || passAttr.values.isEmpty) continue;
+
+        var recoveryKey = '';
+        for (var val in passAttr.values) {
+          if (val != null && val.toString().trim().isNotEmpty) {
+            recoveryKey = val.toString().replaceAll('\n', '').replaceAll('\r', '').trim();
+            break;
+          }
+        }
+
+        if (recoveryKey.isEmpty) continue;
+
+        // Volume-GUID dekodieren (16 Byte binär → formatierte GUID-Hex-Zeichenkette)
+        String volumeGuid = '';
+        final guidAttr = getAttr('msFVE-VolumeGuid');
+        if (guidAttr != null && guidAttr.values.isNotEmpty) {
+          final rawVal = guidAttr.values.first?.toString() ?? '';
+          if (rawVal.isNotEmpty) {
+            volumeGuid = _decodeVolumeGuid(rawVal);
+          }
+        }
+
+        // Erstellungsdatum (whenCreated) formatieren
+        final whenCreatedAttr = getAttr('whenCreated');
+        String? whenCreated;
+        if (whenCreatedAttr != null && whenCreatedAttr.values.isNotEmpty) {
+          whenCreated = _formatADTime(whenCreatedAttr.values.first?.toString());
+        }
+
+        results.add(BitLockerInfo(
+          computerDN: computerDN,
+          recoveryKey: recoveryKey,
+          volumeGuid: volumeGuid,
+          whenCreated: whenCreated,
+        ));
+      }
+
+      // Neueste Schlüssel zuerst
+      results.sort((a, b) => (b.whenCreated ?? '').compareTo(a.whenCreated ?? ''));
+      return results;
+    });
+  }
+
+  /// Wandelt die binär-codierten Rohbytes der msFVE-VolumeGuid in eine
+  /// lesbare Hex-Zeichenkette um.
+  String _decodeVolumeGuid(String rawValue) {
+    final bytes = rawValue.codeUnits.take(16).toList();
+    var hexStrPairs = '';
+
+    for (var i = 0; i < math.min(bytes.length, 16); i++) {
+      if (hexStrPairs.isNotEmpty) hexStrPairs += '-';
+      final byteVal = bytes[i] & 0xFF;
+      final high = (byteVal >> 4) & 0xF;
+      final low  = byteVal & 0xF;
+      hexStrPairs += '0123456789ABCDEF'[high] + '0123456789ABCDEF'[low];
+    }
+
+    return hexStrPairs;
+  }
+
+  /// Wandelt einen AD-Zeitstempel (z.B. 20230514123045.0Z) in ein lesbares Format um
+  String _formatADTime(String? adTime) {
+    if (adTime == null || adTime.length < 14) return adTime ?? '';
+    try {
+      final year = adTime.substring(0, 4);
+      final month = adTime.substring(4, 6);
+      final day = adTime.substring(6, 8);
+      final hour = adTime.substring(8, 10);
+      final min = adTime.substring(10, 12);
+      final sec = adTime.substring(12, 14);
+      return '$day.$month.$year $hour:$min:$sec';
+    } catch (_) {
+      return adTime;
+    }
   }
 }
